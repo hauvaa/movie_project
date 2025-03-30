@@ -15,8 +15,6 @@ from app.serializers import *
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.shortcuts import render, redirect, get_object_or_404
-
-from python.collection_link import ipnUrl
 from .forms import LoginForm
 from django.contrib.auth.hashers import make_password, check_password
 from .models import User
@@ -680,17 +678,17 @@ def create_momo_payment(request):
             'amount': amount,
             'orderId': order_id,
             'orderInfo': order_info,
-            'returnUrl': redirect_url,
-            'notifyUrl': ipn_url,
+            'redirectUrl': redirect_url,
+            'ipnUrl': ipn_url,
             'requestType': 'payWithMethod',
-            'extraData': momo_extra_data
+            'extraData': encoded_extra_data
         }
 
         # Tạo chữ ký (signature)
-        raw_signature = "accessKey=" + access_key + "&amount=" + str(amount) + "&extraData=" + \
-                        encoded_extra_data + "&ipnUrl=" + ipn_url + "&orderId=" + order_id + "&orderInfo=" + \
-                        raw_data['orderInfo'] + "&partnerCode=" + partner_code + "&redirectUrl=" + redirect_url + "&requestId=" + \
-                        order_id + "&requestType=" + "payWithMethod"
+        raw_signature = "accessKey=" + access_key + "&amount=" + str(amount) + "&extraData=" + encoded_extra_data \
+                        + "&ipnUrl=" + ipn_url + "&orderId=" + order_id + "&orderInfo=" + raw_data['orderInfo'] \
+                        + "&partnerCode=" + partner_code + "&redirectUrl=" + redirect_url + "&requestId=" + order_id \
+                        + "&requestType=" + "payWithMethod"
 
         h = hmac.new(bytes(secret_key, 'utf-8'), bytes(raw_signature, 'utf-8'), hashlib.sha256)
         signature = h.hexdigest()
@@ -989,7 +987,10 @@ def check_and_lock_seats(request):
     """
     Kiểm tra và khóa tạm thời ghế đã chọn
     """
+    print("check_and_lock_seats function called")  # Thêm dòng này
     try:
+        request_data = request.data
+        print(f"check_and_lock_seats - Received data: {request_data}")
         # Lấy dữ liệu từ request
         request_data = request.data
         print(f"check_and_lock_seats - Received data: {request_data}")
@@ -1002,7 +1003,8 @@ def check_and_lock_seats(request):
         if not room_id or not screening_id or not seats:
             return Response({
                 'success': False,
-                'message': 'Thiếu thông tin bắt buộc (room_id, screening_id, seats)'
+                'message': 'Thiếu thông tin bắt buộc (room_id, screening_id, seats)',
+                'error': 'invalid_request'
             }, status=400)
             
         print(f"Processing check_and_lock for room_id: {room_id}, screening_id: {screening_id}, seats: {seats}")
@@ -1013,7 +1015,8 @@ def check_and_lock_seats(request):
         except Screening.DoesNotExist:
             return Response({
                 'success': False,
-                'message': 'Lịch chiếu không tồn tại'
+                'message': 'Lịch chiếu không tồn tại',
+                'error': 'screening_not_found'
             }, status=404)
             
         # Kiểm tra phòng chiếu
@@ -1022,7 +1025,8 @@ def check_and_lock_seats(request):
         except Room.DoesNotExist:
             return Response({
                 'success': False,
-                'message': 'Phòng chiếu không tồn tại'
+                'message': 'Phòng chiếu không tồn tại',
+                'error': 'room_not_found'
             }, status=404)
             
         # Kiểm tra ghế đã được đặt chưa
@@ -1030,7 +1034,8 @@ def check_and_lock_seats(request):
         if len(seat_objects) != len(seats):
             return Response({
                 'success': False,
-                'message': 'Một số ghế không tồn tại trong phòng này'
+                'message': 'Một số ghế không tồn tại trong phòng này',
+                'error': 'invalid_seat_selection'
             }, status=400)
             
         # Kiểm tra xem ghế đã được đặt chưa (đã có booking)
@@ -1042,7 +1047,8 @@ def check_and_lock_seats(request):
         if booked_seats:
             return Response({
                 'success': False,
-                'message': f'Ghế đã được đặt: {", ".join(booked_seats)}'
+                'message': f'Ghế đã được đặt: {", ".join(booked_seats)}',
+                'error': 'seat_already_booked'
             }, status=400)
             
         # Lấy giá vé của các ghế
@@ -1051,7 +1057,7 @@ def check_and_lock_seats(request):
         
         for seat in seat_objects:
             # Sử dụng giá vé từ bảng Seat hoặc giá mặc định nếu không có
-            price = float(seat.ticket_price) if seat.ticket_price else 50
+            price = float(seat.ticket_price) if seat.ticket_price else 90
             seat_prices[seat.seat_number] = price
             total_price += price
             
@@ -1076,23 +1082,28 @@ def check_and_lock_seats(request):
         request.session.modified = True
         
         # Trả về kết quả thành công
-        return Response({
-            'success': True,
-            'message': 'Ghế đã được khóa tạm thời',
-            'lock_id': lock_id,
-            'seat_prices': seat_prices,
-            'total_price': total_price,
-            'seats': seats,
-            'room_id': room_id,
-            'screening_id': screening_id
-        })
-        
+        response_data = {
+            "success": True,
+            "message": "Ghế đã được khóa tạm thời",
+            "lock_id": lock_id,
+            "seat_prices": seat_prices,
+            "total_price": total_price,
+            "seats": seats,
+            "room_id": room_id,
+            "screening_id": screening_id
+        }
+
+        print(f"API Response: {response_data}")  # Debug response trước khi trả về
+        print("Final response:", response_data)
+        return Response(response_data, status=200)
+
     except Exception as e:
         error_message = f"Exception in check_and_lock_seats: {str(e)}"
         print(error_message)
         return Response({
             'success': False,
-            'message': str(e)
+            'message': 'Lỗi máy chủ, vui lòng thử lại',
+            'error': str(e)
         }, status=500)
 
 
@@ -1158,3 +1169,81 @@ def check_ticket(request):
     except Booking.DoesNotExist:
         print("🚫 Vé không tồn tại!")
         return JsonResponse({"valid": False, "message": "🚫 Vé không hợp lệ!"})
+
+@api_view(['POST'])
+def custom_payment_return(request):
+    """
+    Xử lý kết quả thanh toán từ client
+    """
+    try:
+        data = request.data  # Lấy dữ liệu từ body request
+        result_code = request.GET.get('resultCode')
+        order_id = request.GET.get('orderId')
+        message = request.GET.get('message', '')
+
+        print(f"Custom payment return received: result_code={result_code}, order_id={order_id}, message={message}")
+
+        # Lấy dữ liệu từ request body
+        user_id = data.get('user_id')
+        screening_id = data.get('screening_id')
+        room_id = data.get('room_id')
+        seats = data.get('seats', [])
+        amount = data.get('amount', 0)
+
+        if result_code == '0':  # Thanh toán thành công
+            print("Thanh toán thành công, xử lý đặt vé...")
+
+            # Tạo booking trong database
+            booking = Booking.objects.create(
+                user_id=user_id,
+                screening_id=screening_id,
+                total_price=amount / 1000,
+                payment_method='Thẻ Ngân Hàng / PayPal'
+            )
+            print(f"Booking thành công, ID: {booking.id}")
+
+            # Tìm và cập nhật trạng thái ghế
+            seats_to_update = Seat.objects.filter(seat_number__in=seats, room_id=room_id, screening_id=screening_id)
+            print(f"Tìm thấy {seats_to_update.count()} ghế để cập nhật")
+
+            if seats_to_update.exists():
+                seats_to_update.update(status='unavailable')
+
+                # Liên kết các ghế với booking
+                for seat in seats_to_update:
+                    UserSeat.objects.create(booking=booking, seat=seat)
+                    print(f"Linked seat {seat.seat_number} to booking")
+            else:
+                # Nếu không tìm thấy ghế có screening_id, thử tìm với room_id
+                room_seats = Seat.objects.filter(seat_number__in=seats, room_id=room_id)
+                if room_seats.exists():
+                    print("Cập nhật screening_id cho ghế chưa có screening_id")
+                    for seat in room_seats:
+                        seat.screening_id = screening_id
+                        seat.status = 'unavailable'
+                        seat.save()
+                        UserSeat.objects.create(booking=booking, seat=seat)
+                        print(f"Linked seat {seat.seat_number} to booking")
+                else:
+                    print("Không tìm thấy ghế nào, tạo ghế mới")
+                    for seat_number in seats:
+                        new_seat = Seat.objects.create(
+                            seat_number=seat_number,
+                            room_id=room_id,
+                            screening_id=screening_id,
+                            status='unavailable',
+                            ticket_price=50  # Giá mặc định
+                        )
+                        UserSeat.objects.create(booking=booking, seat=new_seat)
+                        print(f"Created new seat {seat_number} and linked to booking")
+
+            # Chuyển hướng đến trang e-ticket với booking_id
+            return redirect(f'/e-ticket?booking_id={booking.id}')
+        else:
+            return JsonResponse({'error': 'Thanh toán thất bại', 'message': message})
+
+    except Exception as e:
+        print("Lỗi xử lý thanh toán:", e)
+        return JsonResponse({'error': 'Có lỗi xảy ra', 'details': str(e)})
+
+
